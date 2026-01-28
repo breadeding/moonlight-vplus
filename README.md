@@ -1,3 +1,30 @@
+# Moonlight Android
+
+此项目实现对[Moonlight安卓端 威力增强版](https://github.com/qiin2333/moonlight-vplus)的功能改进<br><br>
+
+
+# 特性
+
+* **修复了开启无障碍服务后无法使用音量键的问题**
+
+* **自动获取无障碍权限**
+  > *需要通过ADB授权android.permission.WRITE_SECURE_SETTINGS*
+
+* **安卓本地鼠标特殊滚轮的识别**
+  > *在使用安卓本地鼠标光标时，部分设备无法正确获取滚轮事件，如华为安卓平板，滚动滚动时会产生触屏效果造成大范围滑动*
+
+* **适用于部分平板键盘的按键映射**
+  > * Home → **Esc**
+  > * Esc + [1-0, -, =] → **F1 - F12**
+  > * Esc + Q → **呼出串流菜单**
+  > * 安卓截图键 → **Windows 截图 (Win+Shift+S)**
+  > * 安卓媒体键 (上一首/播放暂停/下一首) → **F5/F10/F11**
+
+* **支持鼠标中键**
+  > *部分设备将鼠标中键识别为返回键，此功能开启可以区分触摸返回和鼠标中键造成的返回*
+
+<br><br>
+
 <div align="center">
   <img src="./app/src/main/res/drawable/vplus.webp" width="100" alt="Moonlight V+ Logo">
   
