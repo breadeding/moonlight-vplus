@@ -92,8 +92,6 @@ import android.widget.ImageButton;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.annotation.RequiresApi;
-
 import java.io.ByteArrayInputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -175,7 +173,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private boolean surfaceCreated = false;
     private boolean attemptedConnection = false;
     private AnalyticsManager analyticsManager;
-    private long streamStartTime;
+    private long streamStartTime;           // 串流开始的时间戳
+    private long accumulatedStreamTime;     // 累计的有效串流时间（排除后台暂停）
+    private long lastActiveTime;            // 上次活跃的时间戳（用于计算暂停时间）
+    private boolean isStreamingActive;      // 串流是否处于活跃状态
     private int suppressPipRefCount = 0;
     private String pcName;
     private String appName;
@@ -363,6 +364,20 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private boolean detectScrolling = false;
     private boolean detectMouseMiddle = false;
     private boolean detectMouseMiddleDown = false;
+    private static final String CURSOR_PREFS = "CursorPrefs";
+    private static final String KEY_CURSOR_RESTORE = "cursor_switch_state";
+
+    private void saveCursorState(int state) {
+        getSharedPreferences(CURSOR_PREFS, MODE_PRIVATE)
+                .edit()
+                .putInt(KEY_CURSOR_RESTORE, state)
+                .commit(); // 使用 commit 确保即使进程随后被杀也能保存
+    }
+
+    private int getCursorState() {
+        return getSharedPreferences(CURSOR_PREFS, MODE_PRIVATE)
+                .getInt(KEY_CURSOR_RESTORE, 0);
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -1103,6 +1118,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     protected void onResume() {
         super.onResume();
 
+        // 回到游戏时，重置标志位，允许下次暂停时再次恢复
+        isCursorRestored = false;
+
         // 当 Activity 回到前台时，通知服务开始拦截键盘事件。
         KeyboardAccessibilityService.setIntercepting(true);
 
@@ -1802,8 +1820,28 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
     }
 
+    private boolean isCursorRestored = false;
+
+    /**
+     * 封装恢复逻辑：确保只执行一次
+     */
+    public void restoreCursorIfNecessary() {
+        if (!isCursorRestored) {
+            if (prefConfig.cursorAutoShow && cursorVisible && conn != null && connected) {
+                switchRemoteCursorShow();
+                saveCursorState(1); // 标记为已恢复/待处理
+            }
+            isCursorRestored = true; // 锁定，防止重复执行
+        }
+    }
+
     @Override
     protected void onPause() {
+        // 本地光标下，结束串流自动恢复光标显示
+        // 只有在非销毁（按 Home 键或切应用）的情况下尝试自动恢复
+        // 如果是通过按钮退出的，标志位会提前变为 true，这里就不会再跑一次
+        restoreCursorIfNecessary();
+
         // 当 Activity 进入后台时，必须停止拦截，否则会影响手机的正常使用！
         KeyboardAccessibilityService.setIntercepting(false);
 
@@ -1829,6 +1867,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     @Override
     protected void onStop() {
         super.onStop();
+
+        // 暂停串流时长计时（进入后台时串流实际上是暂停的）
+        if (isStreamingActive && lastActiveTime > 0) {
+            accumulatedStreamTime += System.currentTimeMillis() - lastActiveTime;
+            isStreamingActive = false;
+            LimeLog.info("串流时长计时暂停，已累计: " + (accumulatedStreamTime / 1000) + " 秒");
+        }
 
         // 检查是否是因为进入后台（包括锁屏、滑到任务栏、Home键）导致的应用停止
         // 只要 Activity 不是正在 Finishing（即不是用户点了退出或崩溃），且开启了快速恢复，就标记为需要恢复
@@ -1928,7 +1973,15 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         // 记录游戏流媒体结束事件
         if (analyticsManager != null && pcName != null && streamStartTime > 0) {
-            long streamDuration = System.currentTimeMillis() - streamStartTime;
+            // 计算精确的有效串流时长
+            // = 已累计的时间 + 当前活跃段时间（如果当前是活跃状态）
+            long effectiveStreamDuration = accumulatedStreamTime;
+            if (isStreamingActive && lastActiveTime > 0) {
+                effectiveStreamDuration += System.currentTimeMillis() - lastActiveTime;
+            }
+            
+            // 同时记录总耗时（包括后台暂停时间）用于对比
+            long totalElapsedTime = System.currentTimeMillis() - streamStartTime;
 
             // 收集性能数据
             int resolutionWidth = 0;
@@ -1943,9 +1996,17 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 averageDecoderLatency = decoderRenderer.getAverageDecoderLatency();
             }
 
-            analyticsManager.logGameStreamEnd(pcName, appName, streamDuration,
+            // 使用有效串流时长进行统计
+            analyticsManager.logGameStreamEnd(pcName, appName, effectiveStreamDuration,
                     decoderMessage, resolutionWidth, resolutionHeight,
                     averageEndToEndLatency, averageDecoderLatency);
+            
+            LimeLog.info("串流统计 - 有效时长: " + (effectiveStreamDuration / 1000) + "秒, 总耗时: " + (totalElapsedTime / 1000) + "秒");
+            
+            // 重置统计状态
+            streamStartTime = 0;
+            accumulatedStreamTime = 0;
+            isStreamingActive = false;
         }
 
         if (shouldResumeSession) {
@@ -1976,6 +2037,40 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     }
 
     private final Runnable toggleGrab = () -> setInputGrabState(!grabbedInput);
+
+    private void switchRemoteCursorShow() {
+        final short[] keys = {
+                KeyboardTranslator.VK_LCONTROL,
+                KeyboardTranslator.VK_MENU,
+                KeyboardTranslator.VK_LSHIFT,
+                KeyboardTranslator.VK_N
+        };
+
+        final byte[] modifier = {0};
+
+        for (short key : keys) {
+            conn.sendKeyboardInput(key, KeyboardPacket.KEY_DOWN, modifier[0], (byte) 0);
+            modifier[0] |= getModBit(key);
+        }
+
+        handler.postDelayed(() -> {
+            for (int i = keys.length - 1; i >= 0; i--) {
+                short key = keys[i];
+                modifier[0] &= ~getModBit(key);
+                conn.sendKeyboardInput(key, KeyboardPacket.KEY_UP, modifier[0], (byte) 0);
+            }
+        }, 25L);
+    }
+
+    private byte getModBit(short key) {
+        switch (key) {
+            case KeyboardTranslator.VK_LSHIFT:   return KeyboardPacket.MODIFIER_SHIFT;
+            case KeyboardTranslator.VK_LCONTROL: return KeyboardPacket.MODIFIER_CTRL;
+            case KeyboardTranslator.VK_LWIN:     return KeyboardPacket.MODIFIER_META;
+            case KeyboardTranslator.VK_MENU:     return KeyboardPacket.MODIFIER_ALT;
+            default: return 0;
+        }
+    }
 
     // Returns true if the key stroke was consumed
     private boolean handleSpecialKeys(int androidKeyCode, boolean down) {
@@ -2035,10 +2130,17 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                             grabbedInput = true;
                         }
                         cursorVisible = !cursorVisible;
-                        if (cursorVisible) {
-                            inputCaptureProvider.showCursor();
-                        } else {
-                            inputCaptureProvider.hideCursor();
+                        // 切换本地光标时自动切换远程鼠标可见性
+                        if (prefConfig.cursorAutoShow && conn != null && connected) {
+                            switchRemoteCursorShow();
+                        }
+                        if (inputCaptureProvider.isCapturingEnabled()){
+                            Toast.makeText(this, "切换为本地鼠标模式", Toast.LENGTH_SHORT).show();
+                            inputCaptureProvider.disableCapture();
+                        }
+                        else {
+                            Toast.makeText(this, "切换为远程鼠标模式", Toast.LENGTH_SHORT).show();
+                            inputCaptureProvider.enableCapture();
                         }
                         break;
 
@@ -2556,10 +2658,16 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     /**
      * 启用或禁用安卓本地鼠标指针
      */
-    public void enableNativeMousePointer(boolean enable) {
+    public void enableNativeMousePointer(boolean enable, boolean autoSwitch) {
         LimeLog.info("Setting native mouse pointer: " + enable);
 
         prefConfig.enableNativeMousePointer = enable;
+
+        if (autoSwitch && cursorVisible != enable) {
+            if (prefConfig.cursorAutoShow && conn != null && connected) {
+                switchRemoteCursorShow();
+            }
+        }
 
         if (enable) {
             // 启用本地鼠标指针：释放鼠标捕获但保持键盘捕获
@@ -3123,7 +3231,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         int deviceSources = event.getDevice() != null ? event.getDevice().getSources() : 0;
 
         // 本地鼠标指针模式的特殊处理
-        if (prefConfig.enableNativeMousePointer && (eventSource & InputDevice.SOURCE_CLASS_POINTER) != 0) {
+        if (cursorVisible && (eventSource & InputDevice.SOURCE_CLASS_POINTER) != 0) {
             // 检查是否为真正的鼠标设备（而不是触摸屏）
             boolean isActualMouse = (eventSource == InputDevice.SOURCE_MOUSE) ||
                     (eventSource == InputDevice.SOURCE_MOUSE_RELATIVE) ||
@@ -3887,9 +3995,25 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             Handler h = new Handler();
             h.postDelayed(() -> {
                 // 根据配置决定是否启用原生鼠标指针
+                int state = getCursorState();
                 if (prefConfig.enableNativeMousePointer) {
-                    enableNativeMousePointer(true);
+                    // 使用本地鼠标时，连接开始自动关闭远程光标显示
+                    if (state == 1) {
+                        // 状态为 1，说明上次退出或暂停时重新打开了远程光标显示，现在需要关闭
+                        if (prefConfig.cursorAutoShow) {
+                            switchRemoteCursorShow();
+                            saveCursorState(0); // 恢复后重置状态为 0
+                        }
+                    }
+                    enableNativeMousePointer(true, false);
                 } else {
+                    if (state == 0) {
+                        // 状态为 0，说明上次意外退出，已经是关闭状态，现在因为设置改变需要开启
+                        if (prefConfig.cursorAutoShow) {
+                            switchRemoteCursorShow();
+                        }
+                        saveCursorState(1);
+                    }
                     setInputGrabState(true);
                 }
             }, 500);
@@ -3955,8 +4079,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             });
         }
 
-        // 记录游戏流媒体开始事件
+        // 初始化串流时长统计
         streamStartTime = System.currentTimeMillis();
+        accumulatedStreamTime = 0;
+        lastActiveTime = streamStartTime;
+        isStreamingActive = true;
+        
+        // 记录游戏流媒体开始事件
         if (analyticsManager != null && pcName != null) {
             analyticsManager.logGameStreamStart(pcName, appName);
         }
@@ -3971,6 +4100,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     @Override
     protected void onStart() {
         super.onStart();
+
+        // 恢复串流时长计时（从后台恢复时）
+        if (!isStreamingActive && streamStartTime > 0) {
+            lastActiveTime = System.currentTimeMillis();
+            isStreamingActive = true;
+            LimeLog.info("串流时长计时恢复，之前累计: " + (accumulatedStreamTime / 1000) + " 秒");
+        }
 
         if (shouldResumeSession) {
             LimeLog.info("从后台恢复，正在快速重连...");
@@ -4308,7 +4444,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 // 3. 必须没开启原生鼠标 (防止冲突)
                 boolean shouldShow = prefConfig.enableLocalCursorRendering
                         && prefConfig.touchscreenTrackpad
-                        && !prefConfig.enableNativeMousePointer;
+                        && !cursorVisible;
 
                 relativeContext.setEnableLocalCursorRendering(shouldShow);
             }
@@ -4329,7 +4465,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     }
 
     public void refreshLocalCursorState(boolean enabled) {
-        boolean shouldRender = enabled && !prefConfig.enableNativeMousePointer;
+        boolean shouldRender = enabled && !cursorVisible;
 
         for (TouchContext context : relativeTouchContextMap) {
             if (context instanceof RelativeTouchContext) {
@@ -4508,7 +4644,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                             if (targetBitmap != null) {
                                 final android.graphics.Bitmap finalBmp = targetBitmap;
                                 runOnUiThread(() -> {
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && prefConfig.enableNativeMousePointer) {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && cursorVisible) {
                                         // 方案B：当启用了原生指针且API版本符合时，使用 PointerIcon
                                         PointerIcon pointerIcon = PointerIcon.create(finalBmp, hotX, hotY);
                                         streamView.setPointerIcon(pointerIcon);
@@ -4537,7 +4673,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                             lastReceiveTime = System.currentTimeMillis(); // 重置计时，避免疯狂触发
 
                             runOnUiThread(() -> {
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && prefConfig.enableNativeMousePointer) {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && cursorVisible) {
                                     // 恢复为默认箭头
                                     streamView.setPointerIcon(PointerIcon.getSystemIcon(Game.this, PointerIcon.TYPE_ARROW));
                                 } else {

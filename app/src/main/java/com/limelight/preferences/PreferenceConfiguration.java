@@ -239,6 +239,8 @@ public class PreferenceConfiguration {
     public boolean fixMouseMiddle;
     //修复本地鼠标滚轮识别
     public boolean fixMouseWheel;
+    //自动切换远程鼠标可见性
+    public boolean cursorAutoShow;
     public static final int FRAME_PACING_MIN_LATENCY = 0;
     public static final int FRAME_PACING_BALANCED = 1;
     public static final int FRAME_PACING_CAP_FPS = 2;
@@ -795,6 +797,7 @@ public class PreferenceConfiguration {
         config.enableCustomKeyMap=prefs.getBoolean("checkbox_special_key_map",false);
         config.fixMouseMiddle=prefs.getBoolean("checkbox_mouse_middle",false);
         config.fixMouseWheel=prefs.getBoolean("checkbox_mouse_wheel",false);
+        config.cursorAutoShow=prefs.getBoolean("checkbox_cursor_auto_show",false);
         config.enableSops = prefs.getBoolean(SOPS_PREF_STRING, DEFAULT_SOPS);
         config.stretchVideo = prefs.getBoolean(STRETCH_PREF_STRING, DEFAULT_STRETCH);
         config.playHostAudio = prefs.getBoolean(HOST_AUDIO_PREF_STRING, DEFAULT_HOST_AUDIO);

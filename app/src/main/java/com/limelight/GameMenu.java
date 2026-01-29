@@ -309,7 +309,7 @@ public class GameMenu {
                         () -> {
                             game.prefConfig.enableEnhancedTouch = true;
                             game.prefConfig.enableNativeMousePointer = false;
-                            game.enableNativeMousePointer(false);  // 关闭本地鼠标模式
+                            game.enableNativeMousePointer(false, true);  // 关闭本地鼠标模式
                             game.setTouchMode(false);
                             updateEnhancedTouchSetting(true);
                             updateTouchModeSetting(false);
@@ -325,7 +325,7 @@ public class GameMenu {
                         () -> {
                             game.prefConfig.enableEnhancedTouch = false;
                             game.prefConfig.enableNativeMousePointer = false;
-                            game.enableNativeMousePointer(false);  // 关闭本地鼠标模式
+                            game.enableNativeMousePointer(false, true);  // 关闭本地鼠标模式
                             game.setTouchMode(false);
                             updateEnhancedTouchSetting(false);
                             updateTouchModeSetting(false);
@@ -340,7 +340,7 @@ public class GameMenu {
                         isTouchscreenTrackpad && !isNativeMousePointer,
                         () -> {
                             game.prefConfig.enableNativeMousePointer = false;
-                            game.enableNativeMousePointer(false);  // 关闭本地鼠标模式
+                            game.enableNativeMousePointer(false, true);  // 关闭本地鼠标模式
                             game.setTouchMode(true);
                             updateTouchModeSetting(true);
                             Toast.makeText(game, getString(R.string.toast_touch_mode_trackpad_on), Toast.LENGTH_SHORT).show();
@@ -392,7 +392,7 @@ public class GameMenu {
                             game.prefConfig.enableNativeMousePointer = true;
                             game.prefConfig.enableEnhancedTouch = false;
                             game.setTouchMode(false);
-                            game.enableNativeMousePointer(true);
+                            game.enableNativeMousePointer(true, true);
                             updateTouchModeSetting(false);
                             Toast.makeText(game, getString(R.string.toast_touch_mode_native_mouse_on), Toast.LENGTH_SHORT).show();
                         },
@@ -1033,6 +1033,7 @@ public class GameMenu {
         });
 
         setupButtonWithAnimation(customView.findViewById(R.id.btnQuit), scaleDown, scaleUp, v -> {
+            game.restoreCursorIfNecessary();
             if (game.prefConfig.swapQuitAndDisconnect) {
                 game.disconnect();
             }
