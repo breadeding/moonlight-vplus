@@ -2130,6 +2130,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                             grabbedInput = true;
                         }
                         cursorVisible = !cursorVisible;
+                        prefConfig.enableNativeMousePointer = cursorVisible;
                         // 切换本地光标时自动切换远程鼠标可见性
                         if (prefConfig.cursorAutoShow && conn != null && connected) {
                             switchRemoteCursorShow();
@@ -3324,7 +3325,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 }
 
                 // Ignore mouse input if we're not capturing from our input source
-                if (!inputCaptureProvider.isCapturingActive()) {
+                if (!grabbedInput) {
                     // We return true here because otherwise the events may end up causing
                     // Android to synthesize d-pad events.
                     return true;
@@ -3348,7 +3349,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                             conn.sendMouseMove(deltaX, deltaY);
                         }
                     }
-                } else if ((eventSource & InputDevice.SOURCE_CLASS_POSITION) != 0) {
+                }
+                else if ((eventSource & InputDevice.SOURCE_CLASS_POSITION) != 0) {
                     // If this input device is not associated with the view itself (like a trackpad),
                     // we'll convert the device-specific coordinates to use to send the cursor position.
                     // This really isn't ideal but it's probably better than nothing.
@@ -3373,10 +3375,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                             }
                         }
                     }
-                } else if (view != null && trySendPenEvent(view, event)) {
+                }
+                else if (view != null && trySendPenEvent(view, event)) {
                     // If our host supports pen events, send it directly
                     return true;
-                } else if (view != null) {
+                }
+                else if (view != null) {
                     // Otherwise send absolute position based on the view for SOURCE_CLASS_POINTER
                     updateMousePosition(view, event);
                 }
@@ -4008,10 +4012,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     enableNativeMousePointer(true, false);
                 } else {
                     if (state == 0) {
-                        // 状态为 0，说明上次意外退出，已经是关闭状态，现在因为设置改变需要开启
-                        if (prefConfig.cursorAutoShow) {
-                            switchRemoteCursorShow();
-                        }
+                        // 状态为 0，说明上次意外退出
                         saveCursorState(1);
                     }
                     setInputGrabState(true);

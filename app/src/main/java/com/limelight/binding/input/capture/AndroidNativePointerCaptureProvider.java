@@ -39,6 +39,10 @@ public class AndroidNativePointerCaptureProvider extends AndroidPointerIconCaptu
                 continue;
             }
 
+            // 触控笔可能被识别为鼠标设备
+            if (device.getName().contains("Pencil") || device.getName().contains("pencil"))
+                continue;
+
             // Skip touchscreens when considering compatible capture devices.
             // Samsung devices on Android 12 will report a sec_touchpad device
             // with SOURCE_TOUCHSCREEN, SOURCE_KEYBOARD, and SOURCE_MOUSE.
